@@ -1,81 +1,57 @@
 name: SurfaceSnap Scanner
+
 on:
   workflow_dispatch:
     inputs:
       domain:
-        description: 'Domain to scan (e.g. example.com)'
+        description: "Domain to scan (e.g. example.com)"
         required: true
+
+env:
+  TOOLS_DIR: ${{ github.workspace }}/tools          # one temp dir for all binaries
+  SUBF_VER: v2.7.7                                  # pin to stable versions
+  HTTPX_VER: v1.6.5
+  NUCLEI_VER: v3.2.5
+  NAABU_VER: v2.3.2
 
 jobs:
   scan:
     runs-on: ubuntu-latest
 
     steps:
-    # --------------------------------------------------
-    # 1) System deps   (pcap only for naabu live-scan)
-    # --------------------------------------------------
-    - name: Install libpcap
+    # ------------------------------------------------
+    # 1) Minimal OS packages we need
+    # ------------------------------------------------
+    - name: Install system deps
       run: |
         sudo apt-get update -y
-        sudo apt-get install -y libpcap-dev
+        sudo apt-get install -y unzip zip curl libpcap-dev
 
-    # --------------------------------------------------
-    # 2) Download ProjectDiscovery binaries (no build)
-    # --------------------------------------------------
-    - name: Download binaries
+    # ------------------------------------------------
+    # 2) Make tools folder & add to PATH
+    # ------------------------------------------------
+    - name: Prepare tools dir
       run: |
-        mkdir -p "$HOME/tools"
-        cd "$HOME/tools"
+        mkdir -p "${TOOLS_DIR}"
+        echo "${TOOLS_DIR}" >> $GITHUB_PATH
 
-        # ---- subfinder ----
-        curl -Ls https://github.com/projectdiscovery/subfinder/releases/latest/download/subfinder_amd64.tar.gz -o sub.tar.gz
-        tar -xzf sub.tar.gz --strip-components 1 subfinder
-        rm sub.tar.gz
-
-        # ---- httpx ----
-        curl -Ls https://github.com/projectdiscovery/httpx/releases/latest/download/httpx_amd64.tar.gz -o httpx.tar.gz
-        tar -xzf httpx.tar.gz --strip-components 1 httpx
-        rm httpx.tar.gz
-
-        # ---- nuclei ----
-        curl -Ls https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_amd64.tar.gz -o nuclei.tar.gz
-        tar -xzf nuclei.tar.gz --strip-components 1 nuclei
-        rm nuclei.tar.gz
-        nuclei -update-templates  # grab latest vulnerability checks
-
-        # ---- naabu ----
-        curl -Ls https://github.com/projectdiscovery/naabu/releases/latest/download/naabu_amd64.tar.gz -o naabu.tar.gz
-        tar -xzf naabu.tar.gz --strip-components 1 naabu
-        rm naabu.tar.gz
-
-        echo "$HOME/tools" >> "$GITHUB_PATH"
-
-    # --------------------------------------------------
-    # 3) Run the scan pipeline
-    # --------------------------------------------------
-    - name: Run SurfaceSnap Scan
+    # ------------------------------------------------
+    # 3) Download pre-built binaries (zip archives)
+    # ------------------------------------------------
+    - name: Download ProjectDiscovery binaries
+      working-directory: ${{ env.TOOLS_DIR }}
       run: |
-        set -e
-        DOMAIN="${{ github.event.inputs.domain }}"
+        # --- subfinder ---
+        curl -L -o sub.zip \
+          "https://github.com/projectdiscovery/subfinder/releases/download/${{ env.SUBF_VER }}/subfinder_${{ env.SUBF_VER }}_linux_amd64.zip"
+        unzip -j sub.zip -d . subfinder
+        rm sub.zip
 
-        # A) Find sub-domains
-        subfinder -d "$DOMAIN" -silent -o subdomains.txt
+        # --- httpx ---
+        curl -L -o httpx.zip \
+          "https://github.com/projectdiscovery/httpx/releases/download/${{ env.HTTPX_VER }}/httpx_${{ env.HTTPX_VER }}_linux_amd64.zip"
+        unzip -j httpx.zip -d . httpx
+        rm httpx.zip
 
-        # B) Check which are alive
-        httpx -l subdomains.txt -silent -o live.txt
-
-        # C) Port-scan live hosts
-        naabu -l live.txt -top-ports 100 -silent -o ports.txt
-
-        # D) Vulnerability scan
-        nuclei -l live.txt -silent -json -o findings.json
-
-    # --------------------------------------------------
-    # 4) Save output artifact  (downloadable)
-    # --------------------------------------------------
-    - name: Upload findings
-      uses: actions/upload-artifact@v4
-      with:
-        name: SurfaceSnap-Report
-        path: findings.json
-
+        # --- nuclei ---
+        curl -L -o nu
