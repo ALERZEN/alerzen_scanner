@@ -1,0 +1,38 @@
+name: SurfaceSnap Scanner
+
+on:
+  workflow_dispatch:
+    inputs:
+      domain:
+        description: 'Enter domain to scan (e.g., example.com)'
+        required: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.20'
+
+      - name: Install Tools
+        run: |
+          go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+          go install github.com/projectdiscovery/httpx/cmd/httpx@latest
+          go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+          go install github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
+          echo "${GOPATH}/bin" >> $GITHUB_PATH
+
+      - name: Run Scan
+        run: |
+          subfinder -d ${{ github.event.inputs.domain }} -silent -o subdomains.txt
+          httpx -l subdomains.txt -silent -o live.txt
+          naabu -l live.txt -silent -o ports.txt
+          nuclei -l live.txt -json -o findings.json
+
+      - name: Upload Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: SurfaceSnap-Report
+          path: findings.json
