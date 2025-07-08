@@ -1,38 +1,81 @@
 name: SurfaceSnap Scanner
-
 on:
   workflow_dispatch:
     inputs:
       domain:
-        description: 'Enter domain to scan (e.g., example.com)'
+        description: 'Domain to scan (e.g. example.com)'
         required: true
 
 jobs:
   scan:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Setup Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: '1.22'   # ← FIXED here
+    # --------------------------------------------------
+    # 1) System deps   (pcap only for naabu live-scan)
+    # --------------------------------------------------
+    - name: Install libpcap
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y libpcap-dev
 
-      - name: Install Tools
-        run: |
-          go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
-          go install github.com/projectdiscovery/httpx/cmd/httpx@latest
-          go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
-          go install github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
-          echo "${GOPATH}/bin" >> $GITHUB_PATH
+    # --------------------------------------------------
+    # 2) Download ProjectDiscovery binaries (no build)
+    # --------------------------------------------------
+    - name: Download binaries
+      run: |
+        mkdir -p "$HOME/tools"
+        cd "$HOME/tools"
 
-      - name: Run Scan
-        run: |
-          subfinder -d ${{ github.event.inputs.domain }} -silent -o subdomains.txt
-          httpx -l subdomains.txt -silent -o live.txt
-          naabu -l live.txt -silent -o ports.txt
-          nuclei -l live.txt -json -o findings.json
+        # ---- subfinder ----
+        curl -Ls https://github.com/projectdiscovery/subfinder/releases/latest/download/subfinder_amd64.tar.gz -o sub.tar.gz
+        tar -xzf sub.tar.gz --strip-components 1 subfinder
+        rm sub.tar.gz
 
-      - name: Upload Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: SurfaceSnap-Report
-          path: findings.json
+        # ---- httpx ----
+        curl -Ls https://github.com/projectdiscovery/httpx/releases/latest/download/httpx_amd64.tar.gz -o httpx.tar.gz
+        tar -xzf httpx.tar.gz --strip-components 1 httpx
+        rm httpx.tar.gz
+
+        # ---- nuclei ----
+        curl -Ls https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_amd64.tar.gz -o nuclei.tar.gz
+        tar -xzf nuclei.tar.gz --strip-components 1 nuclei
+        rm nuclei.tar.gz
+        nuclei -update-templates  # grab latest vulnerability checks
+
+        # ---- naabu ----
+        curl -Ls https://github.com/projectdiscovery/naabu/releases/latest/download/naabu_amd64.tar.gz -o naabu.tar.gz
+        tar -xzf naabu.tar.gz --strip-components 1 naabu
+        rm naabu.tar.gz
+
+        echo "$HOME/tools" >> "$GITHUB_PATH"
+
+    # --------------------------------------------------
+    # 3) Run the scan pipeline
+    # --------------------------------------------------
+    - name: Run SurfaceSnap Scan
+      run: |
+        set -e
+        DOMAIN="${{ github.event.inputs.domain }}"
+
+        # A) Find sub-domains
+        subfinder -d "$DOMAIN" -silent -o subdomains.txt
+
+        # B) Check which are alive
+        httpx -l subdomains.txt -silent -o live.txt
+
+        # C) Port-scan live hosts
+        naabu -l live.txt -top-ports 100 -silent -o ports.txt
+
+        # D) Vulnerability scan
+        nuclei -l live.txt -silent -json -o findings.json
+
+    # --------------------------------------------------
+    # 4) Save output artifact  (downloadable)
+    # --------------------------------------------------
+    - name: Upload findings
+      uses: actions/upload-artifact@v4
+      with:
+        name: SurfaceSnap-Report
+        path: findings.json
+
