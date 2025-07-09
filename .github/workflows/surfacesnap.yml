@@ -52,10 +52,10 @@ jobs:
           curl -sSL "$url" -o "$file" && unzip -jo "$file" && rm "$file"
         }
 
-        download "https://github.com/projectdiscovery/subfinder/releases/download/${SUBF_VER}/subfinder_${SUBF_VER}_linux_amd64.zip" subfinder.zip
-        download "https://github.com/projectdiscovery/httpx/releases/download/${HTTPX_VER}/httpx_${HTTPX_VER}_linux_amd64.zip" httpx.zip
-        download "https://github.com/projectdiscovery/nuclei/releases/download/${NUCLEI_VER}/nuclei_${NUCLEI_VER}_linux_amd64.zip" nuclei.zip
-        download "https://github.com/projectdiscovery/naabu/releases/download/${NAABU_VER}/naabu_${NAABU_VER}_linux_amd64.zip" naabu.zip
+        download "https://github.com/projectdiscovery/subfinder/releases/download/${SUBF_VER}/subfinder_${SUBF_VER#v}_linux_amd64.zip" subfinder.zip
+        download "https://github.com/projectdiscovery/httpx/releases/download/${HTTPX_VER}/httpx_${HTTPX_VER#v}_linux_amd64.zip" httpx.zip
+        download "https://github.com/projectdiscovery/nuclei/releases/download/${NUCLEI_VER}/nuclei_${NUCLEI_VER#v}_linux_amd64.zip" nuclei.zip
+        download "https://github.com/projectdiscovery/naabu/releases/download/${NAABU_VER}/naabu_${NAABU_VER#v}_linux_amd64.zip" naabu.zip
 
         # Update nuclei templates (latest vulnerability signatures)
         nuclei -update-templates
@@ -88,4 +88,3 @@ jobs:
       with:
         name: SurfaceSnap-Report
         path: findings.json
-
