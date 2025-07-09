@@ -1,90 +1,57 @@
-# .github/workflows/surfacesnap.yml
 name: SurfaceSnap Scanner
-
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # For manual testing
     inputs:
       domain:
-        description: "Domain to scan (e.g. example.com)"
+        description: 'Target domain'
         required: true
-
-env:
-  TOOLS_DIR: ${{ github.workspace }}/tools       # directory to hold binaries
-  SUBF_VER: v2.7.7                               # pin stable versions
-  HTTPX_VER: v1.6.5
-  NUCLEI_VER: v3.2.5
-  NAABU_VER: v2.3.2
+        default: 'example.com'
+  repository_dispatch: # For API triggering
+    types: [run_scan]
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
-
     steps:
-    # --------------------------------------------------------------
-    # 1) System dependencies required by naabu (libpcap) and unzip
-    # --------------------------------------------------------------
-    - name: Install OS packages
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Install Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+        
+    - name: Install Tools
       run: |
-        sudo apt-get update -y
-        sudo apt-get install -y curl unzip libpcap-dev
-
-    # --------------------------------------------------------------
-    # 2) Prepare tools directory and add to PATH
-    # --------------------------------------------------------------
-    - name: Prepare tools directory
+        go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+        go install github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
+        go install github.com/projectdiscovery/httpx/cmd/httpx@latest
+        go install github.com/projectdiscovery/nuclei/v2/cmd/nuclei@latest
+        sudo mv ~/go/bin/* /usr/local/bin/
+        
+    - name: Run Security Scan
       run: |
-        mkdir -p "$TOOLS_DIR"
-        echo "$TOOLS_DIR" >> $GITHUB_PATH
-
-    # --------------------------------------------------------------
-    # 3) Download pre-built binaries (no compiling, no Go needed)
-    # --------------------------------------------------------------
-    - name: Fetch ProjectDiscovery binaries
-      working-directory: ${{ env.TOOLS_DIR }}
-      run: |
-        set -e
-        download() {
-          local url="$1" file="$2"
-          echo "Downloading $file …"
-          curl -sSL "$url" -o "$file" && unzip -jo "$file" && rm "$file"
-        }
-
-        download "https://github.com/projectdiscovery/subfinder/releases/download/${SUBF_VER}/subfinder_${SUBF_VER#v}_linux_amd64.zip" subfinder.zip
-        download "https://github.com/projectdiscovery/httpx/releases/download/${HTTPX_VER}/httpx_${HTTPX_VER#v}_linux_amd64.zip" httpx.zip
-        download "https://github.com/projectdiscovery/nuclei/releases/download/${NUCLEI_VER}/nuclei_${NUCLEI_VER#v}_linux_amd64.zip" nuclei.zip
-        download "https://github.com/projectdiscovery/naabu/releases/download/${NAABU_VER}/naabu_${NAABU_VER#v}_linux_amd64.zip" naabu.zip
-
-        # Update nuclei templates (latest vulnerability signatures)
-        nuclei -update-templates
-
-    # --------------------------------------------------------------
-    # 4) Run the SurfaceSnap scan pipeline
-    # --------------------------------------------------------------
-    - name: Execute scan pipeline
-      run: |
-        set -e
-        DOMAIN="${{ github.event.inputs.domain }}"
-
-        echo "[+] Subdomain discovery…"
-        subfinder -d "$DOMAIN" -silent -o subdomains.txt
-
-        echo "[+] Alive check…"
-        httpx -l subdomains.txt -silent -o live.txt
-
-        echo "[+] Port scan (top‑100)…"
-        naabu -l live.txt -top-ports 100 -silent -o ports.txt
-
-        echo "[+] Vulnerability scan…"
-        nuclei -l live.txt -json -silent -o findings.json
-
-    # --------------------------------------------------------------
-    # 5) Upload findings as workflow artifact
-    # --------------------------------------------------------------
-    - name: Upload findings.json
+        # Get domain from input
+        DOMAIN="${{ github.event.inputs.domain || github.event.client_payload.domain }}"
+        
+        # Discovery
+        subfinder -d $DOMAIN -o subs.txt
+        naabu -list subs.txt -top-ports 1000 -o naabu.txt
+        
+        # HTTP Probe
+        httpx -l naabu.txt -title -status-code -tech-detect -json -o httpx.json
+        
+        # Vulnerability Scan
+        nuclei -u $DOMAIN -j -o nuclei.json -severity medium,critical
+        
+        # Combine results
+        jq -s 'add' httpx.json nuclei.json > results.json
+        
+    - name: Upload Results
       uses: actions/upload-artifact@v4
       with:
-        name: SurfaceSnap-Report
-        path: findings.json
+        name: scan-results
+        path: |
+          results.json
+          subs.txt
+          naabu.txt
