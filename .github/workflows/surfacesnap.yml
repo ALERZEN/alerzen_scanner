@@ -1,108 +1,91 @@
-name: SurfaceSnap
+# .github/workflows/surfacesnap.yml
+name: SurfaceSnap Scanner
 
 on:
   workflow_dispatch:
     inputs:
       domain:
-        description: 'Target domain (e.g., example.com)'
+        description: "Domain to scan (e.g. example.com)"
         required: true
-        type: string
+
+env:
+  TOOLS_DIR: ${{ github.workspace }}/tools       # directory to hold binaries
+  SUBF_VER: v2.7.7                               # pin stable versions
+  HTTPX_VER: v1.6.5
+  NUCLEI_VER: v3.2.5
+  NAABU_VER: v2.3.2
 
 jobs:
   scan:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
 
     steps:
-      - name: Set up environment
-        run: |
-          set -e
-          sudo apt-get update
-          sudo apt-get install -y curl unzip libpcap-dev
+    # --------------------------------------------------------------
+    # 1) System dependencies required by naabu (libpcap) and unzip
+    # --------------------------------------------------------------
+    - name: Install OS packages
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y curl unzip libpcap-dev
 
-          mkdir -p "$HOME/tools"
-          echo "$HOME/tools" >> $GITHUB_PATH
+    # --------------------------------------------------------------
+    # 2) Prepare tools directory and add to PATH
+    # --------------------------------------------------------------
+    - name: Prepare tools directory
+      run: |
+        mkdir -p "$TOOLS_DIR"
+        echo "$TOOLS_DIR" >> $GITHUB_PATH
 
-      - name: Download ProjectDiscovery Tools
-        run: |
-          set -e
-          # Subfinder
-          echo "Attempting to download subfinder..."
-          curl -L -o subfinder.zip https://github.com/projectdiscovery/subfinder/releases/download/v2.7.7/subfinder_2.7.7_linux_amd64.zip
-          CURL_EXIT_CODE=$?
-          if [ $CURL_EXIT_CODE -ne 0 ]; then
-              echo "Error: curl failed to download subfinder.zip. Exit code: $CURL_EXIT_CODE"
-              exit $CURL_EXIT_CODE
-          fi
-          echo "Files in current directory after subfinder download:"
-          ls -la
-          unzip -j subfinder.zip subfinder -d "$HOME/tools"
-          rm subfinder.zip
+    # --------------------------------------------------------------
+    # 3) Download pre-built binaries (no compiling, no Go needed)
+    # --------------------------------------------------------------
+    - name: Fetch ProjectDiscovery binaries
+      working-directory: ${{ env.TOOLS_DIR }}
+      run: |
+        set -e
+        download() {
+          local url="$1" file="$2"
+          echo "Downloading $file …"
+          curl -sSL "$url" -o "$file" && unzip -jo "$file" && rm "$file"
+        }
 
-          # Httpx
-          echo "Attempting to download httpx..."
-          curl -L -o httpx.zip https://github.com/projectdiscovery/httpx/releases/download/v1.6.5/httpx_1.6.5_linux_amd64.zip
-          CURL_EXIT_CODE=$?
-          if [ $CURL_EXIT_CODE -ne 0 ]; then
-              echo "Error: curl failed to download httpx.zip. Exit code: $CURL_EXIT_CODE"
-              exit $CURL_EXIT_CODE
-          fi
-          echo "Files in current directory after httpx download:"
-          ls -la
-          unzip -j httpx.zip httpx -d "$HOME/tools"
-          rm httpx.zip
+        download "https://github.com/projectdiscovery/subfinder/releases/download/${SUBF_VER}/subfinder_${SUBF_VER}_linux_amd64.zip" subfinder.zip
+        download "https://github.com/projectdiscovery/httpx/releases/download/${HTTPX_VER}/httpx_${HTTPX_VER}_linux_amd64.zip" httpx.zip
+        download "https://github.com/projectdiscovery/nuclei/releases/download/${NUCLEI_VER}/nuclei_${NUCLEI_VER}_linux_amd64.zip" nuclei.zip
+        download "https://github.com/projectdiscovery/naabu/releases/download/${NAABU_VER}/naabu_${NAABU_VER}_linux_amd64.zip" naabu.zip
 
-          # Naabu
-          echo "Attempting to download naabu..."
-          curl -L -o naabu.zip https://github.com/projectdiscovery/naabu/releases/download/v2.3.2/naabu_2.3.2_linux_amd64.zip
-          CURL_EXIT_CODE=$?
-          if [ $CURL_EXIT_CODE -ne 0 ]; then
-              echo "Error: curl failed to download naabu.zip. Exit code: $CURL_EXIT_CODE"
-              exit $CURL_EXIT_CODE
-          fi
-          echo "Files in current directory after naabu download:"
-          ls -la
-          unzip -j naabu.zip naabu -d "$HOME/tools"
-          rm naabu.zip
+        # Update nuclei templates (latest vulnerability signatures)
+        nuclei -update-templates
 
-          # Nuclei
-          echo "Attempting to download nuclei..."
-          curl -L -o nuclei.zip https://github.com/projectdiscovery/nuclei/releases/download/v3.2.5/nuclei_3.2.5_linux_amd64.zip
-          CURL_EXIT_CODE=$?
-          if [ $CURL_EXIT_CODE -ne 0 ]; then
-              echo "Error: curl failed to download nuclei.zip. Exit code: $CURL_EXIT_CODE"
-              exit $CURL_EXIT_CODE
-          fi
-          echo "Files in current directory after nuclei download:"
-          ls -la
-          unzip -j nuclei.zip nuclei -d "$HOME/tools"
-          rm nuclei.zip
+    # --------------------------------------------------------------
+    # 4) Run the SurfaceSnap scan pipeline
+    # --------------------------------------------------------------
+    - name: Execute scan pipeline
+      run: |
+        set -e
+        DOMAIN="${{ github.event.inputs.domain }}"
 
-          chmod +x "$HOME/tools"/*
+        echo "[+] Subdomain discovery…"
+        subfinder -d "$DOMAIN" -silent -o subdomains.txt
 
-      - name: Update Nuclei Templates (optional but recommended)
-        run: |
-          set -e
-          nuclei -update-templates
+        echo "[+] Alive check…"
+        httpx -l subdomains.txt -silent -o live.txt
 
-      - name: Run Scan Pipeline
-        run: |
-          set -e
-          DOMAIN="${{ github.event.inputs.domain }}"
+        echo "[+] Port scan (top‑100)…"
+        naabu -l live.txt -top-ports 100 -silent -o ports.txt
 
-          echo "Running subfinder..."
-          subfinder -d "$DOMAIN" -silent -o subdomains.txt
+        echo "[+] Vulnerability scan…"
+        nuclei -l live.txt -json -silent -o findings.json
 
-          echo "Running httpx..."
-          httpx -l subdomains.txt -silent -o live.txt
+    # --------------------------------------------------------------
+    # 5) Upload findings as workflow artifact
+    # --------------------------------------------------------------
+    - name: Upload findings.json
+      uses: actions/upload-artifact@v4
+      with:
+        name: SurfaceSnap-Report
+        path: findings.json
 
-          echo "Running naabu..."
-          naabu -l live.txt -top-ports 100 -silent -o ports.txt
-
-          echo "Running nuclei..."
-          nuclei -l live.txt -silent -json -o findings.json
-
-      - name: Upload Scan Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: SurfaceSnap-Report
-          path: findings.json
