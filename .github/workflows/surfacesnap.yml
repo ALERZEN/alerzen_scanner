@@ -1,57 +1,76 @@
-name: SurfaceSnap Scanner
+name: SurfaceSnap
 
 on:
   workflow_dispatch:
     inputs:
       domain:
-        description: "Domain to scan (e.g. example.com)"
+        description: 'Target domain (e.g., example.com)'
         required: true
-
-env:
-  TOOLS_DIR: ${{ github.workspace }}/tools          # one temp dir for all binaries
-  SUBF_VER: v2.7.7                                  # pin to stable versions
-  HTTPX_VER: v1.6.5
-  NUCLEI_VER: v3.2.5
-  NAABU_VER: v2.3.2
+        type: string
 
 jobs:
   scan:
     runs-on: ubuntu-latest
 
     steps:
-    # ------------------------------------------------
-    # 1) Minimal OS packages we need
-    # ------------------------------------------------
-    - name: Install system deps
-      run: |
-        sudo apt-get update -y
-        sudo apt-get install -y unzip zip curl libpcap-dev
+      - name: Set up environment
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y curl unzip libpcap-dev
 
-    # ------------------------------------------------
-    # 2) Make tools folder & add to PATH
-    # ------------------------------------------------
-    - name: Prepare tools dir
-      run: |
-        mkdir -p "${TOOLS_DIR}"
-        echo "${TOOLS_DIR}" >> $GITHUB_PATH
+          mkdir -p "$HOME/tools"
+          echo "$HOME/tools" >> $GITHUB_PATH
 
-    # ------------------------------------------------
-    # 3) Download pre-built binaries (zip archives)
-    # ------------------------------------------------
-    - name: Download ProjectDiscovery binaries
-      working-directory: ${{ env.TOOLS_DIR }}
-      run: |
-        # --- subfinder ---
-        curl -L -o sub.zip \
-          "https://github.com/projectdiscovery/subfinder/releases/download/${{ env.SUBF_VER }}/subfinder_${{ env.SUBF_VER }}_linux_amd64.zip"
-        unzip -j sub.zip -d . subfinder
-        rm sub.zip
+      - name: Download ProjectDiscovery Tools
+        run: |
+          set -e
+          # Subfinder
+          curl -L -o subfinder.zip https://github.com/projectdiscovery/subfinder/releases/download/v2.7.7/subfinder_2.7.7_linux_amd64.zip
+          unzip -j subfinder.zip subfinder -d "$HOME/tools"
+          rm subfinder.zip
 
-        # --- httpx ---
-        curl -L -o httpx.zip \
-          "https://github.com/projectdiscovery/httpx/releases/download/${{ env.HTTPX_VER }}/httpx_${{ env.HTTPX_VER }}_linux_amd64.zip"
-        unzip -j httpx.zip -d . httpx
-        rm httpx.zip
+          # Httpx
+          curl -L -o httpx.zip https://github.com/projectdiscovery/httpx/releases/download/v1.6.5/httpx_1.6.5_linux_amd64.zip
+          unzip -j httpx.zip httpx -d "$HOME/tools"
+          rm httpx.zip
 
-        # --- nuclei ---
-        curl -L -o nu
+          # Naabu
+          curl -L -o naabu.zip https://github.com/projectdiscovery/naabu/releases/download/v2.3.2/naabu_2.3.2_linux_amd64.zip
+          unzip -j naabu.zip naabu -d "$HOME/tools"
+          rm naabu.zip
+
+          # Nuclei
+          curl -L -o nuclei.zip https://github.com/projectdiscovery/nuclei/releases/download/v3.2.5/nuclei_3.2.5_linux_amd64.zip
+          unzip -j nuclei.zip nuclei -d "$HOME/tools"
+          rm nuclei.zip
+
+          chmod +x "$HOME/tools"/*
+
+      - name: Update Nuclei Templates (optional but recommended)
+        run: |
+          set -e
+          nuclei -update-templates
+
+      - name: Run Scan Pipeline
+        run: |
+          set -e
+          DOMAIN="${{ github.event.inputs.domain }}"
+
+          echo "Running subfinder..."
+          subfinder -d "$DOMAIN" -silent -o subdomains.txt
+
+          echo "Running httpx..."
+          httpx -l subdomains.txt -silent -o live.txt
+
+          echo "Running naabu..."
+          naabu -l live.txt -top-ports 100 -silent -o ports.txt
+
+          echo "Running nuclei..."
+          nuclei -l live.txt -silent -json -o findings.json
+
+      - name: Upload Scan Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: SurfaceSnap-Report
+          path: findings.json
